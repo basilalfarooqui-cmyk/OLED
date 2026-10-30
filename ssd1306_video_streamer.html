@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OLED Video Streamer for ESP32 & SSD1306</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- JSZip for multi-frame ZIP archives -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Lucide icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    
+    /* OLED Display simulation pixel grid effect */
+    .oled-screen {
+      background-color: #030712;
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.9), 0 0 25px rgba(6, 182, 212, 0.2);
+      image-rendering: pixelated;
+    }
+    .oled-glow {
+      box-shadow: 0 0 15px rgba(6, 182, 212, 0.35);
+    }
+    /* Subtle scanline overlay */
+    .scanlines {
+      background: linear-gradient(
+        rgba(18, 16, 16, 0) 50%, 
+        rgba(0, 0, 0, 0.35) 50%
+      ), linear-gradient(
+        90deg,
+        rgba(255, 0, 0, 0.03),
+        rgba(0, 255, 0, 0.01),
+        rgba(0, 0, 255, 0.03)
+      );
+      background-size: 100% 3px, 6px 100%;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-cyan-500 selection:text-black">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+          <i data-lucide="tv" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+            SSD1306 Streamer
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">128×64 Monochrome</span>
+          </h1>
+          <p class="text-xs text-slate-400">Convert video & stream directly to ESP32 over WiFi</p>
+        </div>
+      </div>
+
+      <!-- Quick status pill -->
+      <div class="flex items-center gap-3">
+        <div id="wsIndicator" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono bg-slate-800/80 border border-slate-700 text-slate-400">
+          <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse" id="wsStatusDot"></span>
+          <span id="wsStatusText">Disconnected</span>
+        </div>
+        <button id="toggleSetupModal" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors text-xs flex items-center gap-1.5 border border-slate-700">
+          <i data-lucide="code-xml" class="w-4 h-4"></i>
+          <span>ESP32 Code</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left Column: Source Upload & Frame Processing Config (5 cols) -->
+    <section class="lg:col-span-5 flex flex-col gap-5">
+      
+      <!-- Input Card -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
+        <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <i data-lucide="upload-cloud" class="w-4 h-4 text-cyan-400"></i>
+          1. Media Source
+        </h2>
+
+        <!-- Drag & Drop Zone -->
+        <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-6 text-center cursor-pointer transition-all bg-slate-950/40 hover:bg-cyan-950/10 group">
+          <input type="file" id="fileInput" accept="video/*,.zip,image/*" multiple class="hidden" />
+          <div class="flex flex-col items-center gap-2">
+            <div class="w-12 h-12 rounded-full bg-slate-800 group-hover:bg-cyan-500/20 text-slate-400 group-hover:text-cyan-400 flex items-center justify-center transition-colors">
+              <i data-lucide="film" class="w-6 h-6"></i>
+            </div>
+            <p class="text-sm font-medium text-slate-300">
+              Drop <span class="text-cyan-400">Video</span> (.mp4, .webm), <span class="text-cyan-400">ZIP</span> or images
+            </p>
+            <p class="text-xs text-slate-500">Video frames extracted client-side. No server upload required.</p>
+          </div>
+        </div>
+
+        <div id="fileInfo" class="mt-3 text-xs font-mono text-cyan-300 truncate hidden"></div>
+
+        <!-- Extraction & Dithering Settings -->
+        <div class="mt-5 space-y-4 pt-4 border-t border-slate-800/80">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Target FPS</label>
+              <select id="fpsSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono">
+                <option value="12">12 FPS (Low Bandwidth)</option>
+                <option value="15">15 FPS</option>
+                <option value="20" selected>20 FPS (Recommended)</option>
+                <option value="25">25 FPS (Smooth)</option>
+                <option value="30">30 FPS (High Speed)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Dithering Mode</label>
+              <select id="ditherSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                <option value="floyd" selected>Floyd-Steinberg (Dotted)</option>
+                <option value="bayer">Ordered (Bayer 4x4)</option>
+                <option value="threshold">Hard Threshold (B&W)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs">
+              <span class="text-slate-400">Luminance Threshold</span>
+              <span id="thresholdVal" class="text-cyan-400 font-mono">128</span>
+            </div>
+            <input type="range" id="thresholdSlider" min="10" max="245" value="128" class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+          </div>
+
+          <div class="flex items-center justify-between text-xs pt-1">
+            <label class="flex items-center gap-2 cursor-pointer text-slate-300">
+              <input type="checkbox" id="invertColors" class="rounded bg-slate-950 border-slate-700 text-cyan-500 focus:ring-0">
+              Invert Colors (Dark Mode)
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-slate-300">
+              <input type="checkbox" id="stretchAspect" class="rounded bg-slate-950 border-slate-700 text-cyan-500 focus:ring-0">
+              Fit to 128×64 (Crop)
+            </label>
+          </div>
+
+          <button id="processBtn" disabled class="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:hover:bg-cyan-500 text-black font-semibold text-xs tracking-wider uppercase transition-all shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2">
+            <i data-lucide="cpu" class="w-4 h-4"></i>
+            <span id="processBtnText">Load Media First</span>
+          </button>
+        </div>
+
+        <!-- Conversion Progress -->
+        <div id="progressContainer" class="mt-4 hidden">
+          <div class="flex justify-between text-xs font-mono mb-1 text-slate-400">
+            <span id="progressLabel">Converting frames...</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div id="progressBar" class="h-full bg-cyan-500 w-0 transition-all duration-100"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WebSocket Hardware Link Card -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl">
+        <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <i data-lucide="wifi" class="w-4 h-4 text-cyan-400"></i>
+          2. ESP32 Connection
+        </h2>
+
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">WebSocket URL</label>
+            <div class="flex gap-2">
+              <input type="text" id="wsUrl" value="ws://192.168.4.1:81/" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500">
+              <button id="connectBtn" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition-colors">
+                Connect
+              </button>
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">Default ESP32 SoftAP IP is usually <code class="text-cyan-400 font-mono">192.168.4.1:81</code></p>
+          </div>
+
+          <!-- Stats Grid -->
+          <div class="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800 text-center font-mono">
+            <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+              <span class="block text-[10px] text-slate-500">FPS ACTUAL</span>
+              <span id="liveFps" class="text-sm font-bold text-cyan-400">0</span>
+            </div>
+            <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+              <span class="block text-[10px] text-slate-500">SENT</span>
+              <span id="sentCounter" class="text-sm font-bold text-slate-200">0</span>
+            </div>
+            <div class="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+              <span class="block text-[10px] text-slate-500">LATENCY</span>
+              <span id="txLatency" class="text-sm font-bold text-emerald-400">--</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: OLED Simulator, Playback Controls, Export (7 cols) -->
+    <section class="lg:col-span-7 flex flex-col gap-5">
+      
+      <!-- Virtual OLED Display Screen -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col items-center">
+        <div class="w-full flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 oled-glow"></span>
+            <span class="text-xs font-mono uppercase tracking-wider text-slate-300">SSD1306 Hardware Simulator</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="text-xs text-slate-400 flex items-center gap-1.5 cursor-pointer">
+              <span>Color:</span>
+              <select id="oledColorSelect" class="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-xs text-cyan-400">
+                <option value="#06b6d4">Cyan OLED</option>
+                <option value="#f8fafc">White OLED</option>
+                <option value="#fbbf24">Amber OLED</option>
+                <option value="#22c55e">Green OLED</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- 128x64 Canvas wrapped in physical bezel -->
+        <div class="p-3 bg-black rounded-xl border border-slate-800 shadow-2xl relative">
+          <!-- PCB screw holes for realistic effect -->
+          <span class="absolute top-1 left-1 w-2 h-2 rounded-full border border-yellow-700 bg-amber-900/40"></span>
+          <span class="absolute top-1 right-1 w-2 h-2 rounded-full border border-yellow-700 bg-amber-900/40"></span>
+          <span class="absolute bottom-1 left-1 w-2 h-2 rounded-full border border-yellow-700 bg-amber-900/40"></span>
+          <span class="absolute bottom-1 right-1 w-2 h-2 rounded-full border border-yellow-700 bg-amber-900/40"></span>
+
+          <div class="relative overflow-hidden rounded border border-slate-850">
+            <!-- Simulated OLED Canvas (scaled up 4x for display clarity: 512x256) -->
+            <canvas id="oledCanvas" width="512" height="256" class="oled-screen block max-w-full h-auto w-[512px]"></canvas>
+            <div class="scanlines absolute inset-0 pointer-events-none opacity-40"></div>
+          </div>
+        </div>
+
+        <!-- Scrubber and Timeline -->
+        <div class="w-full mt-6 space-y-3">
+          <div class="flex items-center gap-3">
+            <span id="currFrameLabel" class="text-xs font-mono text-cyan-400 min-w-[50px]">0 / 0</span>
+            <input type="range" id="scrubber" min="0" max="0" value="0" disabled class="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 disabled:opacity-40">
+            <span id="timeLabel" class="text-xs font-mono text-slate-400 min-w-[55px] text-right">00:00</span>
+          </div>
+
+          <!-- Playback Controls -->
+          <div class="flex items-center justify-between pt-2">
+            <div class="flex items-center gap-2">
+              <button id="stepBackBtn" disabled class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300">
+                <i data-lucide="skip-back" class="w-4 h-4"></i>
+              </button>
+              <button id="playPauseBtn" disabled class="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-cyan-400 font-semibold text-xs flex items-center gap-2">
+                <i data-lucide="play" id="playIcon" class="w-4 h-4"></i>
+                <span id="playBtnText">Play Preview</span>
+              </button>
+              <button id="stepFwdBtn" disabled class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300">
+                <i data-lucide="skip-forward" class="w-4 h-4"></i>
+              </button>
+              <button id="loopToggle" class="px-3 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono">
+                Loop: ON
+              </button>
+            </div>
+
+            <!-- Big Live Stream Button -->
+            <button id="streamToggleBtn" disabled class="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-30 disabled:hover:bg-emerald-500 text-slate-950 font-bold text-xs uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition-all">
+              <i data-lucide="radio" class="w-4 h-4"></i>
+              <span id="streamBtnText">Stream to OLED</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Export Card (Direct Binary / C Header download) -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h3 class="text-sm font-semibold text-slate-200">Offline Fallback Export</h3>
+          <p class="text-xs text-slate-400">Download raw 1024-byte frames for SD card playback or C Header array</p>
+        </div>
+        <div class="flex gap-2">
+          <button id="downloadBinBtn" disabled class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-xs font-medium text-slate-200 flex items-center gap-1.5 border border-slate-700">
+            <i data-lucide="download" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>video.bin</span>
+          </button>
+          <button id="downloadHeaderBtn" disabled class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-xs font-medium text-slate-200 flex items-center gap-1.5 border border-slate-700">
+            <i data-lucide="file-code" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>video_data.h</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ESP32 Code Modal -->
+  <div id="codeModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+        <h3 class="font-bold text-slate-100 flex items-center gap-2 text-sm">
+          <i data-lucide="cpu" class="w-4 h-4 text-cyan-400"></i>
+          ESP32 Arduino Firmware (WebSocket Receiver)
+        </h3>
+        <button id="closeModal" class="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <div class="p-4 overflow-y-auto flex-1 font-mono text-xs text-slate-300 leading-relaxed bg-slate-950">
+        <pre><code id="firmwareCodeText">// ESP32 High-Speed SSD1306 WebSocket Receiver
+// Requires: WebSockets by Markus Sattler & U8g2 by olikraus
+
+#include &lt;WiFi.h&gt;
+#include &lt;WebSocketsServer.h&gt;
+#include &lt;Wire.h&gt;
+#include &lt;U8g2lib.h&gt;
+
+// Display constructor for SSD1306 (Hardware I2C)
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+
+// Set your WiFi credentials (or keep as Access Point)
+const char* ssid = "OLED_Streamer";
+const char* password = "password123";
+
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_BIN) {
+    if (length == 1024) { // Exactly 1 frame
+      uint8_t* buf = u8g2.getBufferPtr();
+      memcpy(buf, payload, 1024);
+      u8g2.sendBuffer();
+    }
+  } else if (type == WStype_CONNECTED) {
+    Serial.printf("[%u] Connected!\n", num);
+  } else if (type == WStype_DISCONNECTED) {
+    Serial.printf("[%u] Disconnected!\n", num);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize display
+  u8g2.begin();
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(10, 35, "WiFi Waiting...");
+  u8g2.sendBuffer();
+
+  // Overclock I2C bus to 800 kHz for 30+ FPS
+  Wire.setClock(800000);
+
+  // Start ESP32 as SoftAP
+  WiFi.softAP(ssid, password);
+  Serial.print("Access Point IP: ");
+  Serial.println(WiFi.softAPIP());
+
+  webSocket.begin();
+  webSocket.onEvent(onWebSocketEvent);
+}
+
+void loop() {
+  webSocket.loop();
+}</code></pre>
+      </div>
+      <div class="p-4 border-t border-slate-800 flex justify-between items-center bg-slate-900/60">
+        <span class="text-xs text-slate-400">Connect your phone or laptop to SSID: <strong class="text-cyan-400">OLED_Streamer</strong></span>
+        <button id="copyCodeBtn" class="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-semibold text-xs transition-colors flex items-center gap-1.5">
+          <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+          <span>Copy Firmware</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Offscreen Canvas for Image Resizing & Frame Grab -->
+  <canvas id="offscreenCanvas" width="128" height="64" class="hidden"></canvas>
+  <video id="offscreenVideo" class="hidden" playsinline muted></video>
+
+  <script>
+    // Lucide Icons initialization
+    lucide.createIcons();
+
+    // State Variables
+    let rawFrames = []; // Array of Uint8Array(1024)
+    let currentFrameIdx = 0;
+    let isPlaying = false;
+    let isStreaming = false;
+    let isLooping = true;
+    let playbackInterval = null;
+    let websocket = null;
+    let isConnected = false;
+
+    // Metrics
+    let framesSentCount = 0;
+    let lastFpsCheckTime = performance.now();
+    let sentSinceLastCheck = 0;
+
+    // DOM Elements
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo');
+    const processBtn = document.getElementById('processBtn');
+    const processBtnText = document.getElementById('processBtnText');
+    const fpsSelect = document.getElementById('fpsSelect');
+    const ditherSelect = document.getElementById('ditherSelect');
+    const thresholdSlider = document.getElementById('thresholdSlider');
+    const thresholdVal = document.getElementById('thresholdVal');
+    const invertColors = document.getElementById('invertColors');
+    const stretchAspect = document.getElementById('stretchAspect');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressLabel = document.getElementById('progressLabel');
+
+    // Controls
+    const oledCanvas = document.getElementById('oledCanvas');
+    const oledCtx = oledCanvas.getContext('2d');
+    const oledColorSelect = document.getElementById('oledColorSelect');
+    const scrubber = document.getElementById('scrubber');
+    const currFrameLabel = document.getElementById('currFrameLabel');
+    const timeLabel = document.getElementById('timeLabel');
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    const playBtnText = document.getElementById('playBtnText');
+    const playIcon = document.getElementById('playIcon');
+    const stepBackBtn = document.getElementById('stepBackBtn');
+    const stepFwdBtn = document.getElementById('stepFwdBtn');
+    const loopToggle = document.getElementById('loopToggle');
+    const streamToggleBtn = document.getElementById('streamToggleBtn');
+    const streamBtnText = document.getElementById('streamBtnText');
+
+    // Exports
+    const downloadBinBtn = document.getElementById('downloadBinBtn');
+    const downloadHeaderBtn = document.getElementById('downloadHeaderBtn');
+
+    // WebSocket Elements
+    const wsUrl = document.getElementById('wsUrl');
+    const connectBtn = document.getElementById('connectBtn');
+    const wsIndicator = document.getElementById('wsIndicator');
+    const wsStatusDot = document.getElementById('wsStatusDot');
+    const wsStatusText = document.getElementById('wsStatusText');
+    const liveFps = document.getElementById('liveFps');
+    const sentCounter = document.getElementById('sentCounter');
+    const txLatency = document.getElementById('txLatency');
+
+    // Modal elements
+    const codeModal = document.getElementById('codeModal');
+    const toggleSetupModal = document.getElementById('toggleSetupModal');
+    const closeModal = document.getElementById('closeModal');
+    const copyCodeBtn = document.getElementById('copyCodeBtn');
+
+    // Offscreen Canvas
+    const offCanvas = document.getElementById('offscreenCanvas');
+    const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+    const offVideo = document.getElementById('offscreenVideo');
+
+    let loadedFile = null;
+    let loadedImageFiles = [];
+
+    // Bayer 4x4 Dither Matrix
+    const bayer4x4 = [
+      [ 0,  8,  2, 10],
+      [12,  4, 14,  6],
+      [ 3, 11,  1,  9],
+      [15,  7, 13,  5]
+    ];
+
+    // UI Updates
+    thresholdSlider.addEventListener('input', (e) => {
+      thresholdVal.textContent = e.target.value;
+    });
+
+    oledColorSelect.addEventListener('change', () => {
+      if (rawFrames.length > 0) renderOledPreview(rawFrames[currentFrameIdx]);
+    });
+
+    // File Drop & Selection
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('border-cyan-400');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-cyan-400'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-cyan-400');
+      if (e.dataTransfer.files.length > 0) {
+        handleIncomingFiles(e.dataTransfer.files);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleIncomingFiles(e.target.files);
+      }
+    });
+
+    function handleIncomingFiles(fileList) {
+      if (fileList.length === 1 && (fileList[0].type.startsWith('video/') || fileList[0].name.endsWith('.mp4') || fileList[0].name.endsWith('.webm'))) {
+        loadedFile = fileList[0];
+        loadedImageFiles = [];
+        fileInfo.textContent = `Selected Video: ${loadedFile.name} (${(loadedFile.size / (1024 * 1024)).toFixed(1)} MB)`;
+        fileInfo.classList.remove('hidden');
+        processBtn.disabled = false;
+        processBtnText.textContent = "Convert Video to OLED Frames";
+      } else if (fileList.length === 1 && fileList[0].name.endsWith('.zip')) {
+        loadedFile = fileList[0];
+        loadedImageFiles = [];
+        fileInfo.textContent = `Selected ZIP: ${loadedFile.name}`;
+        fileInfo.classList.remove('hidden');
+        processBtn.disabled = false;
+        processBtnText.textContent = "Extract & Process ZIP Archive";
+      } else {
+        // Multiple images
+        loadedImageFiles = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+        // Sort alphabetically/numerically
+        loadedImageFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+        loadedFile = null;
+        fileInfo.textContent = `Selected ${loadedImageFiles.length} sequential image frames`;
+        fileInfo.classList.remove('hidden');
+        processBtn.disabled = loadedImageFiles.length === 0;
+        processBtnText.textContent = "Process Image Sequence";
+      }
+    }
+
+    // Process Media to SSD1306 Vertical 1-Bit Pages
+    processBtn.addEventListener('click', async () => {
+      processBtn.disabled = true;
+      progressContainer.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressPercent.textContent = '0%';
+      pausePlayback();
+
+      rawFrames = [];
+
+      try {
+        if (loadedFile && loadedFile.name.endsWith('.zip')) {
+          await processZipFile(loadedFile);
+        } else if (loadedFile && (loadedFile.type.startsWith('video/') || loadedFile.name.endsWith('.mp4') || loadedFile.name.endsWith('.webm'))) {
+          await processVideoFile(loadedFile);
+        } else if (loadedImageFiles.length > 0) {
+          await processImageFileList(loadedImageFiles);
+        }
+
+        if (rawFrames.length > 0) {
+          currentFrameIdx = 0;
+          scrubber.max = rawFrames.length - 1;
+          scrubber.value = 0;
+          scrubber.disabled = false;
+          playPauseBtn.disabled = false;
+          stepBackBtn.disabled = false;
+          stepFwdBtn.disabled = false;
+          downloadBinBtn.disabled = false;
+          downloadHeaderBtn.disabled = false;
+          updatePlaybackUI();
+          renderOledPreview(rawFrames[0]);
+          updateStreamButtonState();
+        }
+      } catch (err) {
+        alert("Error during conversion: " + err.message);
+      } finally {
+        processBtn.disabled = false;
+      }
+    });
+
+    // 1. Process Video
+    async function processVideoFile(file) {
+      progressLabel.textContent = "Reading video file...";
+      const targetFps = parseInt(fpsSelect.value, 10);
+      const url = URL.createObjectURL(file);
+      offVideo.src = url;
+
+      await new Promise(resolve => {
+        offVideo.onloadedmetadata = () => resolve();
+      });
+
+      const duration = offVideo.duration;
+      const totalFrames = Math.floor(duration * targetFps);
+      const interval = 1 / targetFps;
+
+      progressLabel.textContent = `Extracting ${totalFrames} frames...`;
+
+      for (let i = 0; i < totalFrames; i++) {
+        const targetTime = i * interval;
+        await seekVideo(offVideo, targetTime);
+        
+        drawTo128x64(offVideo);
+        const frameBytes = convertCanvasToSSD1306();
+        rawFrames.push(frameBytes);
+
+        if (i % 5 === 0 || i === totalFrames - 1) {
+          const pct = Math.round((i / totalFrames) * 100);
+          progressBar.style.width = `${pct}%`;
+          progressPercent.textContent = `${pct}%`;
+        }
+      }
+
+      URL.revokeObjectURL(url);
+      progressLabel.textContent = `Completed! ${rawFrames.length} frames ready.`;
+    }
+
+    function seekVideo(video, time) {
+      return new Promise(resolve => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve();
+        };
+        video.addEventListener('seeked', onSeeked);
+        video.currentTime = time;
+      });
+    }
+
+    // 2. Process Zip Archive
+    async function processZipFile(zipFile) {
+      progressLabel.textContent = "Unzipping frames...";
+      const zip = await JSZip.loadAsync(zipFile);
+      const imageEntries = [];
+
+      zip.forEach((path, entry) => {
+        if (!entry.dir && /\.(png|jpe?g|bmp|webp)$/i.test(entry.name)) {
+          imageEntries.push(entry);
+        }
+      });
+
+      // Sort entries numerically
+      imageEntries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+      const total = imageEntries.length;
+      for (let i = 0; i < total; i++) {
+        const blob = await imageEntries[i].async('blob');
+        const img = await loadImageFromBlob(blob);
+        drawTo128x64(img);
+        rawFrames.push(convertCanvasToSSD1306());
+
+        if (i % 5 === 0 || i === total - 1) {
+          const pct = Math.round(((i + 1) / total) * 100);
+          progressBar.style.width = `${pct}%`;
+          progressPercent.textContent = `${pct}%`;
+        }
+      }
+      progressLabel.textContent = `Extracted ${rawFrames.length} frames.`;
+    }
+
+    // 3. Process Image Sequence
+    async function processImageFileList(files) {
+      const total = files.length;
+      for (let i = 0; i < total; i++) {
+        const img = await loadImageFromBlob(files[i]);
+        drawTo128x64(img);
+        rawFrames.push(convertCanvasToSSD1306());
+
+        if (i % 5 === 0 || i === total - 1) {
+          const pct = Math.round(((i + 1) / total) * 100);
+          progressBar.style.width = `${pct}%`;
+          progressPercent.textContent = `${pct}%`;
+        }
+      }
+      progressLabel.textContent = `Extracted ${rawFrames.length} frames.`;
+    }
+
+    function loadImageFromBlob(blob) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(blob);
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+
+    // Draw Source to 128x64 Canvas with Aspect Ratio Preservation
+    function drawTo128x64(source) {
+      offCtx.fillStyle = '#000000';
+      offCtx.fillRect(0, 0, 128, 64);
+
+      const srcWidth = source.videoWidth || source.width;
+      const srcHeight = source.videoHeight || source.height;
+
+      if (stretchAspect.checked) {
+        offCtx.drawImage(source, 0, 0, 128, 64);
+      } else {
+        const hRatio = 128 / srcWidth;
+        const vRatio = 64 / srcHeight;
+        const ratio = Math.min(hRatio, vRatio);
+
+        const centerShiftX = (128 - srcWidth * ratio) / 2;
+        const centerShiftY = (64 - srcHeight * ratio) / 2;
+
+        offCtx.drawImage(
+          source, 0, 0, srcWidth, srcHeight,
+          centerShiftX, centerShiftY, srcWidth * ratio, srcHeight * ratio
+        );
+      }
+    }
+
+    // Convert 128x64 Canvas to 1024-byte SSD1306 Page-Layout Byte Array
+    function convertCanvasToSSD1306() {
+      const imgData = offCtx.getImageData(0, 0, 128, 64);
+      const data = imgData.data;
+      const mode = ditherSelect.value;
+      const threshold = parseInt(thresholdSlider.value, 10);
+      const invert = invertColors.checked;
+
+      // Extract grayscale luminance (0..255)
+      const gray = new Float32Array(128 * 64);
+      for (let i = 0; i < 128 * 64; i++) {
+        const r = data[i * 4];
+        const g = data[i * 4 + 1];
+        const b = data[i * 4 + 2];
+        // Standard Rec 601 Luma
+        gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+
+      // 1-bit monochrome buffer (128 x 64 booleans: true = white/lit, false = black/off)
+      const binaryMap = new Uint8Array(128 * 64);
+
+      if (mode === 'threshold') {
+        for (let i = 0; i < 128 * 64; i++) {
+          let lit = gray[i] >= threshold ? 1 : 0;
+          if (invert) lit = lit ? 0 : 1;
+          binaryMap[i] = lit;
+        }
+      } else if (mode === 'bayer') {
+        // Bayer 4x4 Ordered Dithering
+        for (let y = 0; y < 64; y++) {
+          for (let x = 0; x < 128; x++) {
+            const idx = y * 128 + x;
+            const matrixVal = (bayer4x4[y % 4][x % 4] / 16.0) * 255;
+            let lit = gray[idx] >= matrixVal ? 1 : 0;
+            if (invert) lit = lit ? 0 : 1;
+            binaryMap[idx] = lit;
+          }
+        }
+      } else {
+        // Floyd-Steinberg Error Diffusion Dithering
+        const errorBuf = new Float32Array(gray);
+        for (let y = 0; y < 64; y++) {
+          for (let x = 0; x < 128; x++) {
+            const idx = y * 128 + x;
+            const oldVal = errorBuf[idx];
+            let newVal = oldVal >= threshold ? 255 : 0;
+            let lit = newVal === 255 ? 1 : 0;
+            if (invert) lit = lit ? 0 : 1;
+            binaryMap[idx] = lit;
+
+            const err = oldVal - newVal;
+            // Diffuse error
+            if (x + 1 < 128) errorBuf[idx + 1] += err * (7 / 16);
+            if (x - 1 >= 0 && y + 1 < 64) errorBuf[(y + 1) * 128 + (x - 1)] += err * (3 / 16);
+            if (y + 1 < 64) errorBuf[(y + 1) * 128 + x] += err * (5 / 16);
+            if (x + 1 < 128 && y + 1 < 64) errorBuf[(y + 1) * 128 + (x + 1)] += err * (1 / 16);
+          }
+        }
+      }
+
+      // Pack into SSD1306 Page Format: 8 Pages (rows of 8 bits) x 128 Columns = 1024 bytes
+      const pageBytes = new Uint8Array(1024);
+      for (let page = 0; page < 8; page++) {
+        for (let col = 0; col < 128; col++) {
+          let byteVal = 0;
+          for (let bit = 0; bit < 8; bit++) {
+            const y = page * 8 + bit;
+            const pixelLit = binaryMap[y * 128 + col];
+            if (pixelLit) {
+              byteVal |= (1 << bit);
+            }
+          }
+          pageBytes[page * 128 + col] = byteVal;
+        }
+      }
+
+      return pageBytes;
+    }
+
+    // Render 1024-byte page buffer onto the OLED Simulation Canvas
+    function renderOledPreview(pageBuffer) {
+      if (!pageBuffer) return;
+      
+      const litColor = oledColorSelect.value;
+      oledCtx.fillStyle = '#030712';
+      oledCtx.fillRect(0, 0, 512, 256); // Clear
+
+      const scale = 4; // 128x64 -> 512x256
+
+      oledCtx.fillStyle = litColor;
+
+      for (let page = 0; page < 8; page++) {
+        for (let col = 0; col < 128; col++) {
+          const byteVal = pageBuffer[page * 128 + col];
+          for (let bit = 0; bit < 8; bit++) {
+            if ((byteVal >> bit) & 1) {
+              const x = col * scale;
+              const y = (page * 8 + bit) * scale;
+              // Pixel block with slight spacing for authentic OLED matrix appearance
+              oledCtx.fillRect(x, y, scale - 0.5, scale - 0.5);
+            }
+          }
+        }
+      }
+    }
+
+    // Playback Controls
+    function updatePlaybackUI() {
+      currFrameLabel.textContent = `${currentFrameIdx + 1} / ${rawFrames.length}`;
+      scrubber.value = currentFrameIdx;
+      const fps = parseInt(fpsSelect.value, 10);
+      const totalSec = Math.floor(currentFrameIdx / fps);
+      const mins = String(Math.floor(totalSec / 60)).padStart(2, '0');
+      const secs = String(totalSec % 60).padStart(2, '0');
+      timeLabel.textContent = `${mins}:${secs}`;
+    }
+
+    function stepFrame(delta) {
+      if (rawFrames.length === 0) return;
+      currentFrameIdx += delta;
+      if (currentFrameIdx >= rawFrames.length) {
+        if (isLooping) {
+          currentFrameIdx = 0;
+        } else {
+          currentFrameIdx = rawFrames.length - 1;
+          pausePlayback();
+          if (isStreaming) toggleStream();
+        }
+      }
+      if (currentFrameIdx < 0) currentFrameIdx = 0;
+
+      updatePlaybackUI();
+      renderOledPreview(rawFrames[currentFrameIdx]);
+
+      // If active streaming, transmit frame to ESP32
+      if (isStreaming && websocket && websocket.readyState === WebSocket.OPEN) {
+        sendFrameToESP32(rawFrames[currentFrameIdx]);
+      }
+    }
+
+    function startPlayback() {
+      if (rawFrames.length === 0) return;
+      isPlaying = true;
+      playBtnText.textContent = "Pause";
+      playIcon.setAttribute('data-lucide', 'pause');
+      lucide.createIcons();
+
+      const fps = parseInt(fpsSelect.value, 10);
+      const intervalMs = 1000 / fps;
+
+      playbackInterval = setInterval(() => {
+        stepFrame(1);
+      }, intervalMs);
+    }
+
+    function pausePlayback() {
+      isPlaying = false;
+      playBtnText.textContent = "Play Preview";
+      playIcon.setAttribute('data-lucide', 'play');
+      lucide.createIcons();
+      if (playbackInterval) {
+        clearInterval(playbackInterval);
+        playbackInterval = null;
+      }
+    }
+
+    playPauseBtn.addEventListener('click', () => {
+      if (isPlaying) pausePlayback();
+      else startPlayback();
+    });
+
+    stepBackBtn.addEventListener('click', () => {
+      pausePlayback();
+      stepFrame(-1);
+    });
+
+    stepFwdBtn.addEventListener('click', () => {
+      pausePlayback();
+      stepFrame(1);
+    });
+
+    scrubber.addEventListener('input', (e) => {
+      currentFrameIdx = parseInt(e.target.value, 10);
+      updatePlaybackUI();
+      renderOledPreview(rawFrames[currentFrameIdx]);
+    });
+
+    loopToggle.addEventListener('click', () => {
+      isLooping = !isLooping;
+      loopToggle.textContent = `Loop: ${isLooping ? 'ON' : 'OFF'}`;
+      loopToggle.className = isLooping 
+        ? "px-3 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono"
+        : "px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-400 text-xs font-mono";
+    });
+
+    // WebSocket Management
+    connectBtn.addEventListener('click', toggleWebSocketConnection);
+
+    function toggleWebSocketConnection() {
+      if (isConnected) {
+        disconnectWebSocket();
+      } else {
+        connectWebSocket();
+      }
+    }
+
+    function connectWebSocket() {
+      const url = wsUrl.value.trim();
+      wsStatusText.textContent = "Connecting...";
+      wsStatusDot.className = "w-2 h-2 rounded-full bg-amber-400 animate-ping";
+
+      try {
+        websocket = new WebSocket(url);
+        websocket.binaryType = 'arraybuffer';
+
+        websocket.onopen = () => {
+          isConnected = true;
+          wsStatusText.textContent = "Connected (ESP32)";
+          wsStatusDot.className = "w-2 h-2 rounded-full bg-emerald-400";
+          connectBtn.textContent = "Disconnect";
+          connectBtn.classList.add('bg-rose-500/20', 'text-rose-400', 'border-rose-500/30');
+          updateStreamButtonState();
+        };
+
+        websocket.onclose = () => {
+          disconnectCleanup();
+        };
+
+        websocket.onerror = (err) => {
+          console.error("WS Error:", err);
+          disconnectCleanup();
+        };
+      } catch (e) {
+        alert("Failed to connect: " + e.message);
+        disconnectCleanup();
+      }
+    }
+
+    function disconnectWebSocket() {
+      if (websocket) {
+        websocket.close();
+      }
+      disconnectCleanup();
+    }
+
+    function disconnectCleanup() {
+      isConnected = false;
+      if (isStreaming) toggleStream();
+      wsStatusText.textContent = "Disconnected";
+      wsStatusDot.className = "w-2 h-2 rounded-full bg-rose-500";
+      connectBtn.textContent = "Connect";
+      connectBtn.classList.remove('bg-rose-500/20', 'text-rose-400', 'border-rose-500/30');
+      updateStreamButtonState();
+    }
+
+    function updateStreamButtonState() {
+      streamToggleBtn.disabled = !(isConnected && rawFrames.length > 0);
+    }
+
+    // Stream Execution & Rate Monitoring
+    streamToggleBtn.addEventListener('click', toggleStream);
+
+    function toggleStream() {
+      isStreaming = !isStreaming;
+      if (isStreaming) {
+        streamBtnText.textContent = "Stop Streaming";
+        streamToggleBtn.classList.remove('bg-emerald-500', 'hover:bg-emerald-400');
+        streamToggleBtn.classList.add('bg-rose-500', 'hover:bg-rose-400');
+        if (!isPlaying) startPlayback();
+      } else {
+        streamBtnText.textContent = "Stream to OLED";
+        streamToggleBtn.classList.add('bg-emerald-500', 'hover:bg-emerald-400');
+        streamToggleBtn.classList.remove('bg-rose-500', 'hover:bg-rose-400');
+      }
+    }
+
+    function sendFrameToESP32(frameUint8Array) {
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+      
+      const sendStart = performance.now();
+      websocket.send(frameUint8Array.buffer);
+
+      framesSentCount++;
+      sentSinceLastCheck++;
+      sentCounter.textContent = framesSentCount;
+
+      const now = performance.now();
+      if (now - lastFpsCheckTime >= 1000) {
+        const actualFps = Math.round((sentSinceLastCheck * 1000) / (now - lastFpsCheckTime));
+        liveFps.textContent = actualFps;
+        sentSinceLastCheck = 0;
+        lastFpsCheckTime = now;
+      }
+
+      txLatency.textContent = `${Math.round(performance.now() - sendStart)}ms`;
+    }
+
+    // Binary / C-Header Exports for SD or Flash Storage
+    downloadBinBtn.addEventListener('click', () => {
+      if (rawFrames.length === 0) return;
+      const combined = new Uint8Array(rawFrames.length * 1024);
+      for (let i = 0; i < rawFrames.length; i++) {
+        combined.set(rawFrames[i], i * 1024);
+      }
+      const blob = new Blob([combined.buffer], { type: 'application/octet-stream' });
+      triggerDownload(blob, 'video.bin');
+    });
+
+    downloadHeaderBtn.addEventListener('click', () => {
+      if (rawFrames.length === 0) return;
+      let header = `// Auto-generated 1-bit SSD1306 frames\n`;
+      header += `#pragma once\n#include <Arduino.h>\n\n`;
+      header += `const uint16_t FRAME_COUNT = ${rawFrames.length};\n`;
+      header += `const size_t FRAME_SIZE = 1024;\n\n`;
+      header += `const uint8_t video_bin[${rawFrames.length * 1024}] PROGMEM = {\n`;
+
+      for (let i = 0; i < rawFrames.length; i++) {
+        header += `  // Frame ${i}\n  `;
+        const f = rawFrames[i];
+        for (let j = 0; j < 1024; j++) {
+          header += '0x' + f[j].toString(16).padStart(2, '0') + ',';
+          if ((j + 1) % 16 === 0) header += '\n  ';
+        }
+        header += '\n';
+      }
+      header += `};\n`;
+
+      const blob = new Blob([header], { type: 'text/plain' });
+      triggerDownload(blob, 'video_data.h');
+    });
+
+    function triggerDownload(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    // Modal Handlers
+    toggleSetupModal.addEventListener('click', () => codeModal.classList.remove('hidden'));
+    closeModal.addEventListener('click', () => codeModal.classList.add('hidden'));
+    copyCodeBtn.addEventListener('click', () => {
+      const code = document.getElementById('firmwareCodeText').innerText;
+      const el = document.createElement('textarea');
+      el.value = code;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      copyCodeBtn.innerHTML = `<i data-lucide="check" class="w-3.5 h-3.5"></i><span>Copied!</span>`;
+      lucide.createIcons();
+      setTimeout(() => {
+        copyCodeBtn.innerHTML = `<i data-lucide="copy" class="w-3.5 h-3.5"></i><span>Copy Firmware</span>`;
+        lucide.createIcons();
+      }, 2000);
+    });
+
+    // Initial canvas state
+    oledCtx.fillStyle = '#030712';
+    oledCtx.fillRect(0, 0, 512, 256);
+    oledCtx.fillStyle = '#06b6d4';
+    oledCtx.font = '16px monospace';
+    oledCtx.fillText('OLED SIMULATOR (128x64)', 140, 130);
+  </script>
+</body>
+</html>
