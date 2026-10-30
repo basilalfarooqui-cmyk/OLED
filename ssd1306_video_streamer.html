@@ -1,260 +1,316 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OLED Video Streamer</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exact-Size Image to PDF Converter</title>
+  <!-- pdf-lib for client-side custom page dimension PDF generation -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 16px;
-      background: #0f172a;
-      color: #f8fafc;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+    :root {
+      --bg: #0b0d13;
+      --card: #131722;
+      --border: #1f2638;
+      --accent: #5855e7;
+      --accent-hover: #4844d4;
+      --text: #f1f5f9;
+      --dim: #79859b;
+      --danger: #ef4444;
+      --success: #10b981;
     }
-    h2 { margin: 8px 0 16px; font-size: 1.4rem; color: #38bdf8; }
-    .card {
-      background: #1e293b;
-      padding: 16px;
-      border-radius: 12px;
-      width: 100%;
-      max-width: 440px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      margin-bottom: 16px;
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); min-height: 100vh; padding: 20px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 16px; }
+    
+    header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    h1 { font-size: 1.25rem; font-weight: 700; }
+    .subtitle { font-size: 0.78rem; color: var(--dim); margin-top: 2px; }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    
+    .drop-zone {
+      border: 2px dashed #334155; border-radius: 10px; padding: 32px 16px;
+      text-align: center; cursor: pointer; position: relative; transition: 0.2s;
+      background: #0d1018;
     }
-    label { font-size: 0.85rem; color: #94a3b8; display: block; margin-bottom: 6px; }
-    input[type="file"], input[type="text"], input[type="number"], button {
-      width: 100%;
-      padding: 10px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      background: #0f172a;
-      color: #fff;
-      font-size: 0.95rem;
-      margin-bottom: 12px;
+    .drop-zone:hover { border-color: var(--accent); }
+    .drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .drop-zone h3 { font-size: 0.95rem; margin-top: 8px; }
+    .drop-zone p { font-size: 0.75rem; color: var(--dim); margin-top: 4px; }
+
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    .input-group { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 4px; }
+    .input-group label { font-size: 0.72rem; color: var(--dim); font-weight: 600; }
+    input[type="text"] {
+      background: #090b10; border: 1px solid var(--border); color: var(--text);
+      padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none;
     }
-    button {
-      background: #0284c7;
-      border: none;
-      font-weight: 600;
-      cursor: pointer;
+
+    .btn-row { display: flex; gap: 10px; }
+    .btn {
+      flex: 1; background: var(--accent); color: #fff; border: none;
+      padding: 12px; border-radius: 8px; font-size: 0.88rem; font-weight: 600;
+      cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;
     }
-    button:disabled { background: #475569; cursor: not-allowed; }
-    .btn-stop { background: #e11d48; }
-    .preview-box {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      background: #000;
-      padding: 12px;
-      border-radius: 8px;
-      border: 2px solid #38bdf8;
-      margin-bottom: 12px;
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { background: #262c3e; color: #64748b; cursor: not-allowed; }
+    .btn-clear { flex: 0 0 auto; background: #1e2433; border: 1px solid var(--border); padding: 12px 18px; }
+    .btn-clear:hover { background: var(--danger); border-color: var(--danger); }
+
+    .image-list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
+    .image-item {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #0d1018; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; gap: 12px;
     }
-    /* Scaled up 2x so it is visible on mobile */
-    canvas#previewCanvas {
-      width: 256px;
-      height: 128px;
-      image-rendering: pixelated;
-      background: #000;
+    .item-left { display: flex; align-items: center; gap: 12px; overflow: hidden; }
+    .badge {
+      background: var(--accent); color: #fff; font-size: 0.72rem; font-weight: 700;
+      min-width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
     }
-    .status {
-      font-size: 0.85rem;
-      padding: 8px;
-      border-radius: 6px;
-      background: #334155;
-      word-break: break-all;
+    .thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid #262c3e; background: #000; }
+    .meta { overflow: hidden; }
+    .meta-name { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta-dim { font-size: 0.7rem; color: var(--dim); margin-top: 2px; }
+    
+    .item-actions { display: flex; gap: 6px; }
+    .icon-btn {
+      background: #1a2030; border: 1px solid var(--border); color: var(--text);
+      width: 30px; height: 30px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;
     }
+    .icon-btn:hover { background: #2a344d; }
+    .icon-btn.del:hover { background: var(--danger); border-color: var(--danger); }
+
+    .status { font-size: 0.8rem; text-align: center; color: var(--success); min-height: 18px; }
   </style>
 </head>
 <body>
 
-  <h2>SSD1306 Video Streamer</h2>
+<div class="container">
+  <header>
+    <div>
+      <h1>Image to PDF Converter</h1>
+      <div class="subtitle">100% Native Image Dimensions • Sequential Order • Zero Compression Loss</div>
+    </div>
+  </header>
 
   <div class="card">
-    <label>1. Connect to ESP32 WebSocket</label>
-    <input type="text" id="wsUrl" value="ws://192.168.4.1:81/" />
-    <button id="btnConnect" onclick="connectWS()">Connect to ESP32</button>
-    <div id="wsStatus" class="status">Status: Disconnected</div>
-  </div>
-
-  <div class="card">
-    <label>2. Select Video (.mp4, .webm)</label>
-    <input type="file" id="videoInput" accept="video/*" onchange="loadVideo(event)" />
-    
-    <label>Target Playback FPS</label>
-    <input type="number" id="fpsInput" value="20" min="5" max="35" />
-
-    <div class="preview-box">
-      <canvas id="previewCanvas" width="128" height="64"></canvas>
-      <span style="font-size: 0.75rem; color: #64748b; margin-top: 4px;">128×64 Live Dither Preview</span>
+    <div class="drop-zone">
+      <input type="file" id="fileInput" accept="image/*" multiple onchange="handleFiles(event)">
+      <div style="font-size: 1.8rem;">🖼️</div>
+      <h3>Tap or Drop Images Here</h3>
+      <p>Supports JPG, PNG, WebP — added in exact selection order</p>
     </div>
 
-    <button id="btnStream" disabled onclick="toggleStream()">Start Processing & Streaming</button>
-    <div id="processStatus" class="status">Ready</div>
+    <div class="controls">
+      <div class="input-group">
+        <label>Output PDF Filename</label>
+        <input type="text" id="pdfName" value="document.pdf" placeholder="document.pdf">
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="btnGenerate" disabled onclick="generatePDF()">📄 Convert & Download PDF</button>
+      <button class="btn btn-clear" id="btnClear" disabled onclick="clearAll()">Clear All</button>
+    </div>
+
+    <div id="statusText" class="status"></div>
   </div>
 
-  <!-- Off-screen elements for processing -->
-  <video id="hiddenVideo" playsinline muted style="display:none;"></video>
-  <canvas id="offscreenCanvas" width="128" height="64" style="display:none;"></canvas>
+  <div class="card" id="listCard" style="display: none;">
+    <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:var(--dim); font-weight:600;">
+      <span>UPLOADED ORDER (PAGE SEQUENCE)</span>
+      <span id="countLabel">0 images</span>
+    </div>
+    <div class="image-list" id="imageList"></div>
+  </div>
+</div>
 
-  <script>
-    let ws = null;
-    let isStreaming = false;
-    let streamTimer = null;
-    const video = document.getElementById('hiddenVideo');
-    const offCanvas = document.getElementById('offscreenCanvas');
-    const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
-    const previewCanvas = document.getElementById('previewCanvas');
-    const prevCtx = previewCanvas.getContext('2d');
+<script>
+  let imageItems = []; // Stores { file, name, dataUrl, width, height }
 
-    function connectWS() {
-      const url = document.getElementById('wsUrl').value;
-      const statusDiv = document.getElementById('wsStatus');
-      statusDiv.innerText = "Connecting...";
+  async function handleFiles(event) {
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
 
-      ws = new WebSocket(url);
-      ws.binaryType = "arraybuffer";
+    const status = document.getElementById('statusText');
+    status.style.color = "#38bdf8";
+    status.innerText = "Reading images in order...";
 
-      ws.onopen = () => {
-        statusDiv.innerText = "Connected to ESP32!";
-        statusDiv.style.color = "#4ade80";
-        checkReady();
+    // Process sequentially to strictly preserve selection/upload order
+    for (const file of files) {
+      const info = await loadImageInfo(file);
+      imageItems.push(info);
+    }
+
+    event.target.value = ""; // Allow re-selecting same files if needed
+    status.innerText = "";
+    renderList();
+  }
+
+  function loadImageInfo(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          resolve({
+            file,
+            name: file.name,
+            dataUrl: e.target.result,
+            width: img.naturalWidth,
+            height: img.naturalHeight
+          });
+        };
+        img.src = e.target.result;
       };
-      ws.onerror = (e) => {
-        statusDiv.innerText = "Connection Failed. Connect to ESP32 Wi-Fi first!";
-        statusDiv.style.color = "#f87171";
-      };
-      ws.onclose = () => {
-        statusDiv.innerText = "Disconnected.";
-        statusDiv.style.color = "#f87171";
-        stopStreaming();
-      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderList() {
+    const listCard = document.getElementById('listCard');
+    const list = document.getElementById('imageList');
+    const btnGen = document.getElementById('btnGenerate');
+    const btnClear = document.getElementById('btnClear');
+    const countLabel = document.getElementById('countLabel');
+
+    if (imageItems.length === 0) {
+      listCard.style.display = 'none';
+      btnGen.disabled = true;
+      btnClear.disabled = true;
+      return;
     }
 
-    function loadVideo(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      video.src = URL.createObjectURL(file);
-      video.load();
-      video.onloadeddata = () => {
-        document.getElementById('processStatus').innerText = `Video loaded (${video.duration.toFixed(1)}s)`;
-        checkReady();
-      };
+    listCard.style.display = 'flex';
+    btnGen.disabled = false;
+    btnClear.disabled = false;
+    countLabel.innerText = `${imageItems.length} ${imageItems.length === 1 ? 'page' : 'pages'}`;
+
+    list.innerHTML = '';
+    imageItems.forEach((item, index) => {
+      const row = document.createElement('div');
+      row.className = 'image-item';
+      row.innerHTML = `
+        <div class="item-left">
+          <div class="badge">${index + 1}</div>
+          <img class="thumb" src="${item.dataUrl}" alt="">
+          <div class="meta">
+            <div class="meta-name">${item.name}</div>
+            <div class="meta-dim">Page Size: ${item.width} × ${item.height} pt</div>
+          </div>
+        </div>
+        <div class="item-actions">
+          <button class="icon-btn" title="Move Up" onclick="moveItem(${index}, -1)" ${index === 0 ? 'disabled' : ''}>↑</button>
+          <button class="icon-btn" title="Move Down" onclick="moveItem(${index}, 1)" ${index === imageItems.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="icon-btn del" title="Remove" onclick="removeItem(${index})">✕</button>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+  }
+
+  function moveItem(index, dir) {
+    const target = index + dir;
+    if (target < 0 || target >= imageItems.length) return;
+    const temp = imageItems[index];
+    imageItems[index] = imageItems[target];
+    imageItems[target] = temp;
+    renderList();
+  }
+
+  function removeItem(index) {
+    imageItems.splice(index, 1);
+    renderList();
+  }
+
+  function clearAll() {
+    imageItems = [];
+    document.getElementById('statusText').innerText = "";
+    renderList();
+  }
+
+  // Convert any image (WebP/PNG/BMP) to raw PNG or JPEG bytes for pdf-lib
+  async function getEmbeddableBytes(item) {
+    const type = item.file.type;
+    if (type === 'image/jpeg' || type === 'image/jpg') {
+      return { format: 'jpg', bytes: await item.file.arrayBuffer() };
     }
-
-    function checkReady() {
-      if (ws && ws.readyState === WebSocket.OPEN && video.src) {
-        document.getElementById('btnStream').disabled = false;
-      }
+    if (type === 'image/png') {
+      return { format: 'png', bytes: await item.file.arrayBuffer() };
     }
+    // Fallback for WebP/GIF/HEIC: draw to canvas at full resolution and export as PNG
+    const canvas = document.createElement('canvas');
+    canvas.width = item.width;
+    canvas.height = item.height;
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.src = item.dataUrl;
+    await new Promise(r => img.onload = r);
+    ctx.drawImage(img, 0, 0);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+    return { format: 'png', bytes: await blob.arrayBuffer() };
+  }
 
-    function toggleStream() {
-      if (isStreaming) {
-        stopStreaming();
-      } else {
-        startStreaming();
+  async function generatePDF() {
+    if (!imageItems.length) return;
+
+    const btn = document.getElementById('btnGenerate');
+    const status = document.getElementById('statusText');
+    btn.disabled = true;
+    status.style.color = "#38bdf8";
+
+    try {
+      const { PDFDocument } = PDFLib;
+      const pdfDoc = await PDFDocument.create();
+
+      for (let i = 0; i < imageItems.length; i++) {
+        const item = imageItems[i];
+        status.innerText = `Embedding page ${i + 1} of ${imageItems.length}...`;
+
+        const { format, bytes } = await getEmbeddableBytes(item);
+        const embeddedImg = format === 'jpg'
+          ? await pdfDoc.embedJpg(bytes)
+          : await pdfDoc.embedPng(bytes);
+
+        // Create page with the EXACT width and height of this specific image
+        const page = pdfDoc.addPage([item.width, item.height]);
+
+        // Draw image filling 100% of the page from (0,0)
+        page.drawImage(embeddedImg, {
+          x: 0,
+          y: 0,
+          width: item.width,
+          height: item.height
+        });
       }
+
+      status.innerText = "Finalizing PDF file...";
+      const pdfBytes = await pdfDoc.save();
+
+      // Trigger browser download
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      let filename = document.getElementById('pdfName').value.trim() || 'document.pdf';
+      if (!filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
+
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      status.style.color = "var(--success)";
+      status.innerText = `Success! Downloaded ${filename} (${imageItems.length} pages).`;
+    } catch (err) {
+      console.error(err);
+      status.style.color = "var(--danger)";
+      status.innerText = "Error: " + err.message;
+    } finally {
+      btn.disabled = false;
     }
-
-    function startStreaming() {
-      isStreaming = true;
-      const btn = document.getElementById('btnStream');
-      btn.innerText = "Stop Streaming";
-      btn.classList.add('btn-stop');
-
-      video.currentTime = 0;
-      video.play();
-
-      const fps = parseInt(document.getElementById('fpsInput').value) || 20;
-      const interval = 1000 / fps;
-
-      streamTimer = setInterval(processAndSendFrame, interval);
-    }
-
-    function stopStreaming() {
-      isStreaming = false;
-      if (streamTimer) clearInterval(streamTimer);
-      video.pause();
-      const btn = document.getElementById('btnStream');
-      btn.innerText = "Start Processing & Streaming";
-      btn.classList.remove('btn-stop');
-    }
-
-    // Floyd-Steinberg Dithering + SSD1306 Page-Byte Packing
-    function processAndSendFrame() {
-      if (video.paused || video.ended) {
-        if (video.ended) {
-          video.currentTime = 0;
-          video.play();
-        }
-        return;
-      }
-
-      // 1. Draw video scaled to 128x64
-      offCtx.drawImage(video, 0, 0, 128, 64);
-      const imgData = offCtx.getImageData(0, 0, 128, 64);
-      const d = imgData.data;
-
-      // 2. Grayscale matrix
-      const gray = new Float32Array(128 * 64);
-      for (let i = 0; i < 128 * 64; i++) {
-        const idx = i * 4;
-        gray[i] = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
-      }
-
-      // 3. Floyd-Steinberg error diffusion
-      const binary = new Uint8Array(128 * 64); // 0 or 1
-      for (let y = 0; y < 64; y++) {
-        for (let x = 0; x < 128; x++) {
-          const idx = y * 128 + x;
-          const oldVal = gray[idx];
-          const newVal = oldVal < 128 ? 0 : 255;
-          binary[idx] = newVal ? 1 : 0;
-          const err = oldVal - newVal;
-
-          if (x + 1 < 128) gray[idx + 1] += (err * 7) / 16;
-          if (x - 1 >= 0 && y + 1 < 64) gray[idx + 128 - 1] += (err * 3) / 16;
-          if (y + 1 < 64) gray[idx + 128] += (err * 5) / 16;
-          if (x + 1 < 128 && y + 1 < 64) gray[idx + 128 + 1] += (err * 1) / 16;
-        }
-      }
-
-      // 4. Update on-screen preview
-      const prevData = prevCtx.createImageData(128, 64);
-      for (let i = 0; i < 128 * 64; i++) {
-        const val = binary[i] ? 255 : 0;
-        prevData.data[i * 4] = val;
-        prevData.data[i * 4 + 1] = val;
-        prevData.data[i * 4 + 2] = val;
-        prevData.data[i * 4 + 3] = 255;
-      }
-      prevCtx.putImageData(prevData, 0, 0);
-
-      // 5. Pack into SSD1306 vertical page format (1024 bytes)
-      const buffer = new Uint8Array(1024);
-      for (let page = 0; page < 8; page++) {
-        for (let x = 0; x < 128; x++) {
-          let byte = 0;
-          for (let bit = 0; bit < 8; bit++) {
-            const y = page * 8 + bit;
-            if (binary[y * 128 + x]) {
-              byte |= (1 << bit);
-            }
-          }
-          buffer[page * 128 + x] = byte;
-        }
-      }
-
-      // 6. Send over WebSocket to ESP32
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(buffer);
-      }
-    }
-  </script>
+  }
+</script>
 </body>
 </html>
